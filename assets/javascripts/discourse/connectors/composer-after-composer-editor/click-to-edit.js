@@ -32,7 +32,6 @@ export default Component.extend({
       event.stopPropagation();
 
       const lineNumber = getLineNumber(event.target);
-      console.log(lineNumber);
       this.scrollTextAreaToCorrectPosition(textArea, lineNumber);
 
       let previewElement = findElementByLineNumber(lineNumber, previewWrapper);
