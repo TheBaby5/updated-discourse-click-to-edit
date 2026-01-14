@@ -1,4 +1,4 @@
-# 1Hack Discourse Click-to-Edit
+# Discourse Click-to-Edit (Updated)
 
 > Forked from [thijsbrilleman/discourse-click-to-edit](https://github.com/thijsbrilleman/discourse-click-to-edit)
 
@@ -13,18 +13,6 @@ Syncs composer preview and editor: click preview to jump to source line, type in
 - **Line Highlighting**: Shows blue highlight on active element in preview
 - **Bi-directional Sync**: Works both ways (preview ↔ editor)
 - **Safari Support**: Special handling for Safari scroll behavior
-
-## Installation
-
-**Add to `app.yml` plugins section:**
-```yaml
-- git clone https://github.com/TheBaby5/updated-discourse-click-to-edit.git discourse-click-to-edit
-```
-
-**Enable in Admin:**
-```
-Admin > Settings > Search "click to edit" > Enable
-```
 
 ## Settings
 
