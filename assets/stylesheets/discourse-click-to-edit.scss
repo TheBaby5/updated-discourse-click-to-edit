@@ -1,12 +1,11 @@
 // Click-to-edit visual styles
 
 .d-editor-preview-wrapper {
-  // Allow tooltip to overflow
-  overflow: visible !important;
+  // Keep default overflow: auto from Discourse core for proper scrolling
+  // Tooltips are positioned inside elements so they work within the scroll container
 
   .d-editor-preview {
-    // Ensure overflow is visible for tooltips
-    overflow: visible;
+    // Keep default overflow behavior - tooltips positioned inside elements
 
     @mixin activeComposerPreviewElement {
       box-shadow: 0px 0px 0px 2px var(--tertiary) !important;
