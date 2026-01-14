@@ -1,81 +1,29 @@
-import Component from "@ember/component";
+import { withPluginApi } from "discourse/lib/plugin-api";
 import { cancel, debounce, schedule } from "@ember/runloop";
 
 const SCROLL_DEBOUNCE_MS = 50;
 const HIGHLIGHT_DEBOUNCE_MS = 100;
 
-export default Component.extend({
-  // Properties initialized to null
-  clickHandler: null,
-  scrollHandler: null,
-  inputHandler: null,
-  keyDownHandler: null,
-  preview: null,
-  previewWrapper: null,
-  scrollParent: null,
-  textArea: null,
-  activeElementCSSStyleRule: null,
-  clonedTextArea: null,
-  textareaObserver: null,
-  isInitialized: false,
+class ClickToEditHandler {
+  constructor() {
+    this.clickHandler = null;
+    this.scrollHandler = null;
+    this.inputHandler = null;
+    this.keyDownHandler = null;
+    this.preview = null;
+    this.previewWrapper = null;
+    this.scrollParent = null;
+    this.textArea = null;
+    this.activeElementCSSStyleRule = null;
+    this.clonedTextArea = null;
+    this.isInitialized = false;
+    this._scrollDebounceTimer = null;
+    this._highlightDebounceTimer = null;
+    this._destroyed = false;
+  }
 
-  // Debounce handlers for cleanup
-  _scrollDebounceTimer: null,
-  _highlightDebounceTimer: null,
-
-  didInsertElement() {
-    this._super(...arguments);
-    // Use schedule to ensure DOM is ready
-    schedule("afterRender", this, this.waitForTextarea);
-  },
-
-  waitForTextarea() {
-    if (this.isDestroying || this.isDestroyed) {
-      return;
-    }
-
-    const textArea = document.querySelector(".d-editor-textarea-wrapper textarea");
-
-    if (textArea) {
-      this.initializeClickToEdit(textArea);
-      return;
-    }
-
-    // Wait for textarea to be added to DOM
-    const observer = new MutationObserver((mutations) => {
-      if (this.isDestroying || this.isDestroyed) {
-        observer.disconnect();
-        return;
-      }
-
-      for (const mutation of mutations) {
-        if (mutation.type === 'childList') {
-          const ta = document.querySelector(".d-editor-textarea-wrapper textarea");
-          if (ta) {
-            observer.disconnect();
-            this.initializeClickToEdit(ta);
-            return;
-          }
-        }
-      }
-    });
-
-    // Start observing the composer area for changes
-    const editorContainer = document.querySelector(".d-editor-container") ||
-                           document.querySelector(".reply-area") ||
-                           document.querySelector("#reply-control");
-    if (editorContainer) {
-      observer.observe(editorContainer, {
-        childList: true,
-        subtree: true
-      });
-    }
-
-    this.textareaObserver = observer;
-  },
-
-  initializeClickToEdit(textArea) {
-    if (this.isInitialized || this.isDestroying || this.isDestroyed) {
+  initialize(textArea, previewWrapper) {
+    if (this.isInitialized || this._destroyed) {
       return;
     }
 
@@ -85,11 +33,13 @@ export default Component.extend({
       return;
     }
 
-    // Cache DOM references
     this.textArea = textArea;
-    this.previewWrapper = document.querySelector(".d-editor-preview-wrapper");
-    this.scrollParent = document.querySelector(".wmd-controls");
-    this.preview = document.querySelector(".d-editor-preview");
+    this.previewWrapper = previewWrapper;
+    this.scrollParent = previewWrapper.closest(".wmd-controls") ||
+                        previewWrapper.closest(".d-editor-container") ||
+                        previewWrapper.parentElement;
+    this.preview = previewWrapper.querySelector(".d-editor-preview") ||
+                   document.querySelector(".d-editor-preview");
 
     if (!this.previewWrapper || !this.textArea) {
       return;
@@ -114,7 +64,7 @@ export default Component.extend({
     this.textArea.addEventListener("mouseup", this.scrollHandler);
     this.textArea.addEventListener("input", this.inputHandler);
     this.textArea.addEventListener("keydown", this.keyDownHandler);
-  },
+  }
 
   _handleClick(event) {
     event.preventDefault();
@@ -131,25 +81,24 @@ export default Component.extend({
     if (previewElement) {
       this.updateActiveElementCSSStyleRule(previewElement);
     }
-  },
+  }
 
   _handleScroll() {
     this._debouncedScrollPreview();
-  },
+  }
 
   _handleInput() {
     this._debouncedScrollPreview();
-  },
+  }
 
   _handleKeyDown(event) {
     if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
-      // Use debounce for arrow key navigation
       this._debouncedScrollPreview();
     }
-  },
+  }
 
   _debouncedScrollPreview() {
-    if (this.isDestroying || this.isDestroyed) {
+    if (this._destroyed) {
       return;
     }
 
@@ -158,10 +107,10 @@ export default Component.extend({
       this.scrollPreviewWrapperToCorrectPosition,
       SCROLL_DEBOUNCE_MS
     );
-  },
+  }
 
   scrollPreviewWrapperToCorrectPosition() {
-    if (this.isDestroying || this.isDestroyed || !this.textArea || !this.previewWrapper) {
+    if (this._destroyed || !this.textArea || !this.previewWrapper) {
       return;
     }
 
@@ -176,7 +125,6 @@ export default Component.extend({
 
     const previewElement = this.findElementByLineNumber(lineNumber);
     if (previewElement) {
-      // Debounce the highlight update separately
       this._highlightDebounceTimer = debounce(
         this,
         () => this.updateActiveElementCSSStyleRule(previewElement),
@@ -186,7 +134,7 @@ export default Component.extend({
       const offset = this.getOffsetTopUntil(previewElement, this.scrollParent);
       this.previewWrapper.scrollTop = offset - parseInt(this.previewWrapper.clientHeight / 2, 10);
     }
-  },
+  }
 
   scrollTextAreaToCorrectPosition(lineIndex) {
     if (lineIndex === null || !this.textArea) {
@@ -207,7 +155,6 @@ export default Component.extend({
     if (this.isSafari()) {
       this._scrollSafari(ta, selStart);
     } else {
-      // Standard browsers
       ta.selectionStart = ta.selectionEnd = selStart;
       ta.blur();
       ta.focus();
@@ -215,7 +162,7 @@ export default Component.extend({
 
     ta.selectionStart = selStart;
     ta.selectionEnd = selEnd;
-  },
+  }
 
   _scrollSafari(ta, selStart) {
     if (!this.clonedTextArea) {
@@ -242,10 +189,10 @@ export default Component.extend({
     }
 
     ta.scrollTop = verticalCenter;
-  },
+  }
 
   updateActiveElementCSSStyleRule(previewElement) {
-    if (!this.activeElementCSSStyleRule || this.isDestroying || this.isDestroyed) {
+    if (!this.activeElementCSSStyleRule || this._destroyed) {
       return;
     }
 
@@ -258,7 +205,7 @@ export default Component.extend({
     const selector = this.getUniqueCSSSelector(previewElement);
     this.activeElementCSSStyleRule.innerHTML =
       `${selector} { box-shadow: 0px 0px 0px 1px rgba(0,144,237,.5) !important; background-color: rgba(0, 144, 237, 0.35); z-index: 3; }`;
-  },
+  }
 
   findElementByLineNumber(line) {
     if (line === null || !this.previewWrapper) {
@@ -275,7 +222,7 @@ export default Component.extend({
     }
 
     return this.findElementByLineNumber(line - 1);
-  },
+  }
 
   getLineNumber(target) {
     if (!target || target.nodeName === "HTML") {
@@ -288,7 +235,7 @@ export default Component.extend({
     }
 
     return this.getLineNumber(target.parentElement);
-  },
+  }
 
   getOffsetTopUntil(elem, parent) {
     if (!elem || !parent) {
@@ -303,7 +250,7 @@ export default Component.extend({
     }
 
     return offsetTop + this.getOffsetTopUntil(offsetParent, parent);
-  },
+  }
 
   getUniqueCSSSelector(el) {
     const stack = [];
@@ -334,20 +281,16 @@ export default Component.extend({
     }
 
     return stack.join(" > ");
-  },
+  }
 
   isSafari() {
     const ua = navigator.userAgent;
     return ua.indexOf("Safari") > -1 && ua.indexOf("Chrome") === -1;
-  },
+  }
 
-  willDestroyElement() {
-    this._super(...arguments);
-    this._cleanup();
-  },
+  destroy() {
+    this._destroyed = true;
 
-  _cleanup() {
-    // Cancel pending debounce timers
     if (this._scrollDebounceTimer) {
       cancel(this._scrollDebounceTimer);
     }
@@ -355,7 +298,6 @@ export default Component.extend({
       cancel(this._highlightDebounceTimer);
     }
 
-    // Remove event listeners
     if (this.previewWrapper && this.clickHandler) {
       this.previewWrapper.removeEventListener("mousedown", this.clickHandler);
     }
@@ -371,22 +313,14 @@ export default Component.extend({
       }
     }
 
-    // Remove style element
     if (this.activeElementCSSStyleRule && this.activeElementCSSStyleRule.parentNode) {
       this.activeElementCSSStyleRule.parentNode.removeChild(this.activeElementCSSStyleRule);
     }
 
-    // Remove cloned textarea
     if (this.clonedTextArea && this.clonedTextArea.parentNode) {
       this.clonedTextArea.parentNode.removeChild(this.clonedTextArea);
     }
 
-    // Disconnect observer
-    if (this.textareaObserver) {
-      this.textareaObserver.disconnect();
-    }
-
-    // Clear references
     this.clickHandler = null;
     this.scrollHandler = null;
     this.inputHandler = null;
@@ -397,7 +331,81 @@ export default Component.extend({
     this.textArea = null;
     this.activeElementCSSStyleRule = null;
     this.clonedTextArea = null;
-    this.textareaObserver = null;
     this.isInitialized = false;
-  },
-});
+  }
+}
+
+// Track active handlers by textarea element
+const activeHandlers = new WeakMap();
+
+function initializeClickToEdit(textArea) {
+  if (!textArea || activeHandlers.has(textArea)) {
+    return;
+  }
+
+  const previewWrapper = document.querySelector(".d-editor-preview-wrapper");
+  if (!previewWrapper) {
+    return;
+  }
+
+  const handler = new ClickToEditHandler();
+  handler.initialize(textArea, previewWrapper);
+  activeHandlers.set(textArea, handler);
+
+  // Clean up when textarea is removed from DOM
+  const observer = new MutationObserver((mutations) => {
+    if (!document.body.contains(textArea)) {
+      handler.destroy();
+      activeHandlers.delete(textArea);
+      observer.disconnect();
+    }
+  });
+
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
+function checkForEditors() {
+  // Find all textareas in d-editor components
+  const textareas = document.querySelectorAll(".d-editor-textarea-wrapper textarea");
+  textareas.forEach((textarea) => {
+    if (!activeHandlers.has(textarea)) {
+      // Wait a bit for preview to be ready
+      schedule("afterRender", null, () => initializeClickToEdit(textarea));
+    }
+  });
+}
+
+export default {
+  name: "click-to-edit-site-wide",
+
+  initialize(container) {
+    withPluginApi("1.0.0", (api) => {
+      // Check on route changes
+      api.onPageChange(() => {
+        schedule("afterRender", null, checkForEditors);
+      });
+
+      // Also observe DOM for dynamically added editors
+      const observer = new MutationObserver((mutations) => {
+        for (const mutation of mutations) {
+          if (mutation.type === "childList" && mutation.addedNodes.length > 0) {
+            for (const node of mutation.addedNodes) {
+              if (node.nodeType === Node.ELEMENT_NODE) {
+                if (node.matches?.(".d-editor-textarea-wrapper textarea") ||
+                    node.querySelector?.(".d-editor-textarea-wrapper textarea")) {
+                  schedule("afterRender", null, checkForEditors);
+                  return;
+                }
+              }
+            }
+          }
+        }
+      });
+
+      observer.observe(document.body, { childList: true, subtree: true });
+
+      // Initial check
+      schedule("afterRender", null, checkForEditors);
+    });
+  }
+};
