@@ -510,10 +510,11 @@ class ClickToEditHandler {
   scrollPreviewToElement(element) {
     if (!element || !this.previewWrapper) return;
 
-    const offset = this.getOffsetTopUntil(element, this.scrollParent);
+    // Calculate offset relative to previewWrapper since that's the scrollable element
+    const offset = this.getOffsetTopUntil(element, this.previewWrapper);
     const targetScroll = offset - parseInt(this.previewWrapper.clientHeight / 2, 10);
 
-    // Smooth scroll
+    // Smooth scroll the preview wrapper
     this.previewWrapper.scrollTo({
       top: Math.max(0, targetScroll),
       behavior: 'smooth'
