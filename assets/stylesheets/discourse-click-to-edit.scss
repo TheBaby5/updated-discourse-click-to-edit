@@ -34,25 +34,25 @@
     &:not(:has(:hover)):hover {
       @include activeComposerPreviewElement;
 
-      // Show "Click to edit" tooltip
+      // Show "Click to edit" tooltip - positioned at bottom-right, always visible
       &::after {
-        content: "✎ Click to edit";
+        content: "✎ Edit";
         position: absolute;
-        top: -28px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: var(--primary-very-high);
+        bottom: -6px;
+        right: -6px;
+        background: var(--tertiary);
         color: var(--secondary);
-        padding: 4px 10px;
-        border-radius: 4px;
-        font-size: 11px;
-        font-weight: 500;
+        padding: 3px 8px;
+        border-radius: 10px;
+        font-size: 10px;
+        font-weight: 600;
         white-space: nowrap;
         z-index: 1000;
         pointer-events: none;
-        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
         opacity: 0;
-        animation: fadeInTooltip 0.2s ease 0.3s forwards;
+        animation: fadeInTooltip 0.15s ease 0.2s forwards;
+        letter-spacing: 0.3px;
       }
     }
   }
@@ -81,10 +81,169 @@
 @keyframes fadeInTooltip {
   from {
     opacity: 0;
-    transform: translateX(-50%) translateY(5px);
+    transform: scale(0.9);
   }
   to {
     opacity: 1;
-    transform: translateX(-50%) translateY(0);
+    transform: scale(1);
+  }
+}
+
+// ==========================================
+// MOBILE & TABLET RESPONSIVE STYLES
+// ==========================================
+
+// Tablets (portrait and smaller)
+@media screen and (max-width: 1024px) {
+  .d-editor-preview-wrapper .d-editor-preview {
+    a,
+    p,
+    em,
+    strong,
+    code,
+    li,
+    h1,
+    h2,
+    h3,
+    h4,
+    blockquote,
+    pre > code > span {
+      // Larger touch targets
+      padding: 2px;
+
+      &:not(:has(:hover)):hover::after {
+        // Larger tooltip for touch
+        font-size: 11px;
+        padding: 5px 10px;
+        bottom: -8px;
+        right: -8px;
+      }
+    }
+  }
+}
+
+// Mobile devices
+@media screen and (max-width: 768px) {
+  .d-editor-preview-wrapper .d-editor-preview {
+    // Better touch feedback on mobile
+    -webkit-tap-highlight-color: var(--tertiary-low);
+
+    a,
+    p,
+    em,
+    strong,
+    code,
+    li,
+    h1,
+    h2,
+    h3,
+    h4,
+    blockquote,
+    pre > code > span {
+      // Increase touch target size
+      min-height: 32px;
+
+      // On mobile, show tooltip on active/focus instead of hover
+      &:active,
+      &:focus {
+        box-shadow: 0px 0px 0px 2px var(--tertiary) !important;
+        background-color: var(--tertiary-low);
+        border-radius: 3px;
+
+        &::after {
+          content: "✎ Tap to edit";
+          position: absolute;
+          bottom: -8px;
+          right: 0;
+          left: 0;
+          margin: 0 auto;
+          width: fit-content;
+          background: var(--tertiary);
+          color: var(--secondary);
+          padding: 6px 12px;
+          border-radius: 12px;
+          font-size: 12px;
+          font-weight: 600;
+          white-space: nowrap;
+          z-index: 1000;
+          pointer-events: none;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+          opacity: 1;
+          animation: none;
+        }
+      }
+
+      // Hide hover tooltip on mobile (no hover on touch)
+      &:not(:has(:hover)):hover::after {
+        display: none;
+      }
+    }
+  }
+}
+
+// Small mobile devices
+@media screen and (max-width: 480px) {
+  .d-editor-preview-wrapper .d-editor-preview {
+    a,
+    p,
+    li,
+    h1,
+    h2,
+    h3,
+    h4,
+    blockquote {
+      // Even larger touch targets for small screens
+      min-height: 36px;
+      padding: 4px 2px;
+
+      &:active::after,
+      &:focus::after {
+        font-size: 11px;
+        padding: 5px 10px;
+        bottom: -10px;
+      }
+    }
+  }
+}
+
+// Touch device detection - hide hover effects, enhance tap
+@media (hover: none) and (pointer: coarse) {
+  .d-editor-preview-wrapper .d-editor-preview {
+    // Remove hover cursor on touch devices
+    &,
+    a {
+      cursor: default !important;
+    }
+
+    a,
+    p,
+    em,
+    strong,
+    code,
+    li,
+    h1,
+    h2,
+    h3,
+    h4,
+    blockquote,
+    pre > code > span {
+      // Disable hover styles completely
+      &:not(:has(:hover)):hover {
+        box-shadow: none !important;
+        background-color: transparent;
+
+        &::after {
+          display: none !important;
+        }
+      }
+
+      // Enhanced active state for touch
+      &:active {
+        box-shadow: 0px 0px 0px 3px var(--tertiary) !important;
+        background-color: var(--tertiary-low);
+        border-radius: 4px;
+        transition: all 0.1s ease;
+      }
+    }
   }
 }
