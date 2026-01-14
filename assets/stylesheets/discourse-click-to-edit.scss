@@ -1,79 +1,130 @@
 // Click-to-edit visual styles
 
-.d-editor-preview-wrapper .d-editor-preview {
-  @mixin activeComposerPreviewElement {
-    box-shadow: 0px 0px 0px 2px var(--tertiary) !important;
-    background-color: var(--tertiary-low);
-    border-radius: 3px;
-    z-index: 3;
-    position: relative;
-  }
+.d-editor-preview-wrapper {
+  // Allow tooltip to overflow
+  overflow: visible !important;
 
-  // Change cursor to indicate clickable - pointer is more universally understood
-  &,
-  a {
-    cursor: pointer !important;
-  }
+  .d-editor-preview {
+    // Ensure overflow is visible for tooltips
+    overflow: visible;
 
-  // Hoverable elements with click-to-edit indicator
-  a,
-  p,
-  em,
-  strong,
-  code,
-  li,
-  h1,
-  h2,
-  h3,
-  h4,
-  blockquote,
-  pre > code > span {
-    position: relative;
-    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+    @mixin activeComposerPreviewElement {
+      box-shadow: 0px 0px 0px 2px var(--tertiary) !important;
+      background-color: var(--tertiary-low);
+      border-radius: 3px;
+      z-index: 3;
+      position: relative;
+    }
 
-    &:not(:has(:hover)):hover {
-      @include activeComposerPreviewElement;
+    // Change cursor to indicate clickable - pointer is more universally understood
+    &,
+    a {
+      cursor: pointer !important;
+    }
 
-      // Show "Click to edit" tooltip - positioned at bottom-right, always visible
-      &::after {
-        content: "✎ Edit";
-        position: absolute;
-        bottom: -6px;
-        right: -6px;
-        background: var(--tertiary);
-        color: var(--secondary);
-        padding: 3px 8px;
-        border-radius: 10px;
-        font-size: 10px;
-        font-weight: 600;
-        white-space: nowrap;
-        z-index: 1000;
-        pointer-events: none;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
-        opacity: 0;
-        animation: fadeInTooltip 0.15s ease 0.2s forwards;
-        letter-spacing: 0.3px;
+    // Hoverable elements with click-to-edit indicator
+    a,
+    p,
+    em,
+    strong,
+    code,
+    li,
+    h1,
+    h2,
+    h3,
+    h4,
+    blockquote,
+    pre > code > span,
+    // Added elements
+    details,
+    summary,
+    video,
+    .video-container,
+    .onebox,
+    iframe {
+      position: relative;
+      transition: background-color 0.15s ease, box-shadow 0.15s ease;
+
+      &:not(:has(:hover)):hover {
+        @include activeComposerPreviewElement;
+
+        // Show "Click to edit" tooltip - positioned inside element to avoid clipping
+        &::after {
+          content: "✎ Edit";
+          position: absolute;
+          bottom: 4px;
+          right: 4px;
+          background: var(--tertiary);
+          color: var(--secondary);
+          padding: 3px 8px;
+          border-radius: 10px;
+          font-size: 10px;
+          font-weight: 600;
+          white-space: nowrap;
+          z-index: 1000;
+          pointer-events: none;
+          box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+          opacity: 0;
+          animation: fadeInTooltip 0.15s ease 0.2s forwards;
+          letter-spacing: 0.3px;
+        }
       }
     }
-  }
 
-  // Don't show tooltip on inline elements to avoid clutter
-  em, strong, code {
-    &:not(:has(:hover)):hover::after {
-      display: none;
+    // Special styling for details elements
+    details {
+      &:not(:has(:hover)):hover {
+        // Highlight the whole details block
+        outline: 2px solid var(--tertiary);
+        outline-offset: 2px;
+      }
+
+      summary {
+        cursor: pointer !important;
+
+        &:not(:has(:hover)):hover {
+          @include activeComposerPreviewElement;
+
+          &::after {
+            content: "✎ Edit [details]";
+          }
+        }
+      }
     }
-  }
 
-  .now-editing {
-    // separate from the former selector due to Firefox incompatibilities
-    @include activeComposerPreviewElement;
-  }
+    // Special styling for video elements
+    video,
+    .video-container,
+    .onebox-video {
+      &:not(:has(:hover)):hover {
+        @include activeComposerPreviewElement;
 
-  // collapse last span in codeblock if empty
-  pre > code > span:not(:last-child) {
-    display: inline-block;
-    width: inherit;
-    min-width: 100%;
+        &::after {
+          content: "✎ Edit video";
+          bottom: 8px;
+          right: 8px;
+        }
+      }
+    }
+
+    // Don't show tooltip on inline elements to avoid clutter
+    em, strong, code {
+      &:not(:has(:hover)):hover::after {
+        display: none;
+      }
+    }
+
+    .now-editing {
+      // separate from the former selector due to Firefox incompatibilities
+      @include activeComposerPreviewElement;
+    }
+
+    // collapse last span in codeblock if empty
+    pre > code > span:not(:last-child) {
+      display: inline-block;
+      width: inherit;
+      min-width: 100%;
+    }
   }
 }
 
@@ -107,7 +158,10 @@
     h3,
     h4,
     blockquote,
-    pre > code > span {
+    pre > code > span,
+    details,
+    summary,
+    video {
       // Larger touch targets
       padding: 2px;
 
@@ -115,8 +169,8 @@
         // Larger tooltip for touch
         font-size: 11px;
         padding: 5px 10px;
-        bottom: -8px;
-        right: -8px;
+        bottom: 6px;
+        right: 6px;
       }
     }
   }
@@ -139,7 +193,10 @@
     h3,
     h4,
     blockquote,
-    pre > code > span {
+    pre > code > span,
+    details,
+    summary,
+    video {
       // Increase touch target size
       min-height: 32px;
 
@@ -153,11 +210,8 @@
         &::after {
           content: "✎ Tap to edit";
           position: absolute;
-          bottom: -8px;
-          right: 0;
-          left: 0;
-          margin: 0 auto;
-          width: fit-content;
+          bottom: 4px;
+          right: 4px;
           background: var(--tertiary);
           color: var(--secondary);
           padding: 6px 12px;
@@ -191,7 +245,9 @@
     h2,
     h3,
     h4,
-    blockquote {
+    blockquote,
+    details,
+    summary {
       // Even larger touch targets for small screens
       min-height: 36px;
       padding: 4px 2px;
@@ -200,7 +256,8 @@
       &:focus::after {
         font-size: 11px;
         padding: 5px 10px;
-        bottom: -10px;
+        bottom: 4px;
+        right: 4px;
       }
     }
   }
@@ -226,7 +283,10 @@
     h3,
     h4,
     blockquote,
-    pre > code > span {
+    pre > code > span,
+    details,
+    summary,
+    video {
       // Disable hover styles completely
       &:not(:has(:hover)):hover {
         box-shadow: none !important;

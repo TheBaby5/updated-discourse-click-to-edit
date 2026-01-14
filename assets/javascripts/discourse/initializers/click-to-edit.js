@@ -86,7 +86,11 @@ const PATTERNS = {
   discourseDate: /\[date=[^\]]+\]/gi,
 
   // Poll syntax
-  discoursePoll: /\[poll[^\]]*\][\s\S]*?\[\/poll\]/gi
+  discoursePoll: /\[poll[^\]]*\][\s\S]*?\[\/poll\]/gi,
+
+  // Details syntax - capture the title
+  detailsOpen: /\[details="([^"]+)"\]/i,
+  detailsClose: /\[\/details\]/i
 };
 
 class ClickToEditHandler {
@@ -169,6 +173,24 @@ class ClickToEditHandler {
 
     const target = event.target;
 
+    // Special handling for details/summary elements
+    const detailsMatch = this._handleDetailsClick(target);
+    if (detailsMatch !== null) {
+      this.scrollTextAreaToCorrectPosition(detailsMatch.line);
+      if (detailsMatch.element) {
+        this.updateActiveElementCSSStyleRule(detailsMatch.element);
+      }
+      return;
+    }
+
+    // Special handling for video elements
+    const videoMatch = this._handleVideoClick(target);
+    if (videoMatch !== null) {
+      this.scrollTextAreaToCorrectPosition(videoMatch);
+      this.updateActiveElementCSSStyleRule(target.closest('video') || target);
+      return;
+    }
+
     // Try line number first (works for Markdown with data-ln)
     const lineNumber = this.getLineNumber(target);
     if (lineNumber !== null) {
@@ -186,6 +208,159 @@ class ClickToEditHandler {
       this.scrollTextAreaToCorrectPosition(matchedLine);
       this.updateActiveElementCSSStyleRule(target);
     }
+  }
+
+  // =============================================
+  // DETAILS/SUMMARY SPECIAL HANDLING
+  // =============================================
+
+  _handleDetailsClick(target) {
+    if (!this.textArea) return null;
+
+    // Check if clicked on summary element (the clickable title)
+    const summary = target.closest('summary');
+    if (summary) {
+      const details = summary.closest('details');
+      // Find the [details="..."] line that matches this summary
+      return this._findDetailsOpeningLine(summary.textContent?.trim(), details);
+    }
+
+    // Check if clicked inside a details element (but not summary)
+    const details = target.closest('details');
+    if (details && !target.closest('summary')) {
+      // Find the content line or the closing tag
+      const contentLine = this._findDetailsContentLine(target, details);
+      if (contentLine !== null) {
+        return { line: contentLine, element: target };
+      }
+    }
+
+    return null;
+  }
+
+  _findDetailsOpeningLine(summaryText, detailsElement) {
+    const lines = this.textArea.value.split("\n");
+
+    // Find [details="..."] line
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const match = line.match(PATTERNS.detailsOpen);
+      if (match) {
+        // Found a details opening tag
+        // If we have multiple details, try to match by title
+        if (summaryText) {
+          const titleInTag = match[1];
+          const normalizedTitle = this.normalizeText(titleInTag);
+          const normalizedSummary = this.normalizeText(summaryText);
+          if (normalizedTitle === normalizedSummary ||
+              normalizedTitle.includes(normalizedSummary) ||
+              normalizedSummary.includes(normalizedTitle)) {
+            return { line: i, element: detailsElement };
+          }
+        }
+        // If no summary text or no match yet, return first found
+        if (!summaryText) {
+          return { line: i, element: detailsElement };
+        }
+      }
+    }
+
+    // Fallback: return first details line found
+    for (let i = 0; i < lines.length; i++) {
+      if (PATTERNS.detailsOpen.test(lines[i])) {
+        return { line: i, element: detailsElement };
+      }
+    }
+
+    return null;
+  }
+
+  _findDetailsContentLine(target, detailsElement) {
+    const lines = this.textArea.value.split("\n");
+    const targetText = target.textContent?.trim();
+
+    if (!targetText) return null;
+
+    // Find the details block boundaries
+    let detailsStart = -1;
+    let detailsEnd = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+      if (PATTERNS.detailsOpen.test(lines[i])) {
+        detailsStart = i;
+      }
+      if (detailsStart >= 0 && PATTERNS.detailsClose.test(lines[i])) {
+        detailsEnd = i;
+        break;
+      }
+    }
+
+    if (detailsStart < 0) return null;
+
+    // Search within the details block for matching content
+    const normalizedTarget = this.normalizeText(targetText);
+    for (let i = detailsStart + 1; i < (detailsEnd > 0 ? detailsEnd : lines.length); i++) {
+      const strippedLine = this.stripAllSyntax(lines[i]);
+      const normalizedLine = this.normalizeText(strippedLine);
+
+      if (normalizedLine && normalizedTarget) {
+        if (normalizedLine === normalizedTarget ||
+            normalizedLine.includes(normalizedTarget) ||
+            normalizedTarget.includes(normalizedLine)) {
+          return i;
+        }
+      }
+    }
+
+    // If clicking near end, return the [/details] line
+    return detailsEnd > 0 ? detailsEnd : null;
+  }
+
+  _findDetailsClosingLine() {
+    const lines = this.textArea.value.split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (PATTERNS.detailsClose.test(lines[i])) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  // =============================================
+  // VIDEO SPECIAL HANDLING
+  // =============================================
+
+  _handleVideoClick(target) {
+    // Check if clicked on video or inside video container
+    const video = target.closest('video');
+    const videoContainer = target.closest('.video-container, .video-placeholder-container, .onebox-video');
+
+    if (!video && !videoContainer) return null;
+
+    const lines = this.textArea.value.split("\n");
+
+    // Look for video-related syntax
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // HTML video tag
+      if (/<video/i.test(line)) {
+        return i;
+      }
+      // BBCode video
+      if (/\[video\]/i.test(line)) {
+        return i;
+      }
+      // Video URL patterns
+      if (/\.(mp4|webm|ogg|mov)/i.test(line)) {
+        return i;
+      }
+      // YouTube/Vimeo embeds
+      if (/youtube\.com|youtu\.be|vimeo\.com/i.test(line)) {
+        return i;
+      }
+    }
+
+    return null;
   }
 
   // =============================================
@@ -245,8 +420,13 @@ class ClickToEditHandler {
     const lineNumber = textUpToCursor.split("\n").length - 1;
     const currentLineText = this.getLineText(lineNumber);
 
+    // Special handling for details syntax in editor
+    let previewElement = this._findPreviewElementForDetailsSyntax(currentLineText, lineNumber);
+
     // Try finding element by line number first (Markdown with data-ln)
-    let previewElement = this.findElementByLineNumber(lineNumber);
+    if (!previewElement) {
+      previewElement = this.findElementByLineNumber(lineNumber);
+    }
 
     // If not found, try content-based matching
     if (!previewElement && currentLineText) {
@@ -268,6 +448,63 @@ class ClickToEditHandler {
       // Scroll preview to show the element
       this.scrollPreviewToElement(previewElement);
     }
+  }
+
+  _findPreviewElementForDetailsSyntax(lineText, lineNumber) {
+    if (!this.previewWrapper) return null;
+
+    // Check if on [details="..."] line
+    const detailsOpenMatch = lineText.match(PATTERNS.detailsOpen);
+    if (detailsOpenMatch) {
+      const title = detailsOpenMatch[1];
+      const normalizedTitle = this.normalizeText(title);
+
+      // Find the details element with matching summary
+      const allDetails = this.previewWrapper.querySelectorAll('details');
+      for (const details of allDetails) {
+        const summary = details.querySelector('summary');
+        if (summary) {
+          const summaryText = this.normalizeText(summary.textContent);
+          if (summaryText === normalizedTitle ||
+              summaryText.includes(normalizedTitle) ||
+              normalizedTitle.includes(summaryText)) {
+            return details;
+          }
+        }
+      }
+      // Return first details if no match
+      if (allDetails.length > 0) return allDetails[0];
+    }
+
+    // Check if on [/details] line
+    if (PATTERNS.detailsClose.test(lineText)) {
+      // Find content just before [/details]
+      const lines = this.textArea.value.split("\n");
+      // Look backwards for content
+      for (let i = lineNumber - 1; i >= 0; i--) {
+        const prevLine = lines[i].trim();
+        if (prevLine && !PATTERNS.detailsOpen.test(prevLine) && !PATTERNS.detailsClose.test(prevLine)) {
+          // Find this content in preview
+          const normalizedPrev = this.normalizeText(this.stripAllSyntax(prevLine));
+          if (normalizedPrev) {
+            // Look inside details elements
+            const allDetails = this.previewWrapper.querySelectorAll('details');
+            for (const details of allDetails) {
+              const content = details.textContent;
+              if (this.normalizeText(content).includes(normalizedPrev)) {
+                return details;
+              }
+            }
+          }
+          break;
+        }
+      }
+      // Fallback: return last details element
+      const allDetails = this.previewWrapper.querySelectorAll('details');
+      if (allDetails.length > 0) return allDetails[allDetails.length - 1];
+    }
+
+    return null;
   }
 
   scrollPreviewToElement(element) {
@@ -413,9 +650,11 @@ class ClickToEditHandler {
       }
     }
 
-    // Videos
-    if (lineText.includes('<video') || /\[video\]/i.test(lineText)) {
-      const videos = this.previewWrapper.querySelectorAll('video, .video-container, .onebox');
+    // Videos - enhanced handling
+    if (lineText.includes('<video') || /\[video\]/i.test(lineText) ||
+        /\.(mp4|webm|ogg|mov)/i.test(lineText) ||
+        /youtube\.com|youtu\.be|vimeo\.com/i.test(lineText)) {
+      const videos = this.previewWrapper.querySelectorAll('video, .video-container, .onebox, .onebox-video, iframe[src*="youtube"], iframe[src*="vimeo"]');
       if (videos.length > 0) return videos[0];
     }
 
@@ -431,10 +670,34 @@ class ClickToEditHandler {
       if (dates.length > 0) return dates[0];
     }
 
-    // Details/spoilers
-    if (/\[details=/i.test(lineText) || /\[spoiler\]/i.test(lineText)) {
-      const details = this.previewWrapper.querySelectorAll('details, .spoiler, .spoiled');
-      if (details.length > 0) return details[0];
+    // Details/spoilers - use enhanced handling
+    if (PATTERNS.detailsOpen.test(lineText)) {
+      const match = lineText.match(PATTERNS.detailsOpen);
+      if (match) {
+        const title = match[1];
+        const normalizedTitle = this.normalizeText(title);
+        const allDetails = this.previewWrapper.querySelectorAll('details');
+        for (const details of allDetails) {
+          const summary = details.querySelector('summary');
+          if (summary) {
+            const summaryText = this.normalizeText(summary.textContent);
+            if (summaryText.includes(normalizedTitle) || normalizedTitle.includes(summaryText)) {
+              return details;
+            }
+          }
+        }
+        if (allDetails.length > 0) return allDetails[0];
+      }
+    }
+
+    if (PATTERNS.detailsClose.test(lineText)) {
+      const allDetails = this.previewWrapper.querySelectorAll('details');
+      if (allDetails.length > 0) return allDetails[allDetails.length - 1];
+    }
+
+    if (/\[spoiler\]/i.test(lineText)) {
+      const spoilers = this.previewWrapper.querySelectorAll('.spoiler, .spoiled, .spoiler-blurred');
+      if (spoilers.length > 0) return spoilers[0];
     }
 
     // Code blocks
@@ -521,6 +784,13 @@ class ClickToEditHandler {
       types.add('.lightbox-wrapper');
     }
 
+    // Videos
+    if (/<video/i.test(lineText) || /\[video\]/i.test(lineText) || /\.(mp4|webm|ogg)/i.test(lineText)) {
+      types.add('video');
+      types.add('.video-container');
+      types.add('.onebox');
+    }
+
     // Bold/italic/formatting
     if (/\*\*.*\*\*/.test(lineText) || /\[b\]/i.test(lineText)) {
       types.add('strong');
@@ -532,7 +802,10 @@ class ClickToEditHandler {
     }
 
     // Special elements
-    if (/\[details/i.test(lineText)) types.add('details');
+    if (/\[details/i.test(lineText)) {
+      types.add('details');
+      types.add('summary');
+    }
     if (/\[spoiler/i.test(lineText)) types.add('.spoiler');
     if (/\[poll/i.test(lineText)) types.add('.poll');
     if (/\[date/i.test(lineText)) types.add('.discourse-local-date');
