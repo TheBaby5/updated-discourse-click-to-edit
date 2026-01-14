@@ -1,45 +1,69 @@
 import Component from "@ember/component";
+import { cancel, debounce, schedule } from "@ember/runloop";
+
+const SCROLL_DEBOUNCE_MS = 50;
+const HIGHLIGHT_DEBOUNCE_MS = 100;
 
 export default Component.extend({
   // Properties initialized to null
   clickHandler: null,
-  mouseUpHandler: null,
+  scrollHandler: null,
   inputHandler: null,
   keyDownHandler: null,
   preview: null,
+  previewWrapper: null,
+  scrollParent: null,
+  textArea: null,
   activeElementCSSStyleRule: null,
   clonedTextArea: null,
   textareaObserver: null,
+  isInitialized: false,
+
+  // Debounce handlers for cleanup
+  _scrollDebounceTimer: null,
+  _highlightDebounceTimer: null,
 
   didInsertElement() {
     this._super(...arguments);
-    this.waitForTextarea();
+    // Use schedule to ensure DOM is ready
+    schedule("afterRender", this, this.waitForTextarea);
   },
 
   waitForTextarea() {
+    if (this.isDestroying || this.isDestroyed) {
+      return;
+    }
+
     const textArea = document.querySelector(".d-editor-textarea-wrapper textarea");
-    
+
     if (textArea) {
-      // Textarea is already in the DOM
       this.initializeClickToEdit(textArea);
       return;
     }
 
     // Wait for textarea to be added to DOM
     const observer = new MutationObserver((mutations) => {
+      if (this.isDestroying || this.isDestroyed) {
+        observer.disconnect();
+        return;
+      }
+
       for (const mutation of mutations) {
         if (mutation.type === 'childList') {
-          const textArea = document.querySelector(".d-editor-textarea-wrapper textarea");
-          if (textArea) {
-            this.initializeClickToEdit(textArea);
+          const ta = document.querySelector(".d-editor-textarea-wrapper textarea");
+          if (ta) {
+            observer.disconnect();
+            this.initializeClickToEdit(ta);
             return;
           }
         }
       }
     });
 
-    // Start observing the d-editor container for changes
-    const editorContainer = document.querySelector(".d-editor-container");
+    // Start observing the composer area for changes
+    const editorContainer = document.querySelector(".d-editor-container") ||
+                           document.querySelector(".reply-area") ||
+                           document.querySelector("#reply-control");
     if (editorContainer) {
       observer.observe(editorContainer, {
         childList: true,
@@ -47,87 +71,130 @@ export default Component.extend({
       });
     }
 
-    // Store observer reference for cleanup
     this.textareaObserver = observer;
   },
 
   initializeClickToEdit(textArea) {
-    // Only initialize if we're using TextareaEditor (not rich editor)
-    const prosemirrorEditor = document.querySelector(".d-editor-textarea-wrapper .ProseMirror");
-    if (prosemirrorEditor) {
-      return; // Rich editor is active, don't initialize
-    }
-
-    const previewWrapper = document.querySelector(".d-editor-preview-wrapper");
-    const scrollParent = document.querySelector(".wmd-controls");
-    this.preview = document.querySelector(".d-editor-preview");
-
-    if (!previewWrapper) {
+    if (this.isInitialized || this.isDestroying || this.isDestroyed) {
       return;
     }
 
-    // Create and append a style element for active element styling
+    // Skip if rich editor (ProseMirror) is active
+    const prosemirrorEditor = document.querySelector(".d-editor-textarea-wrapper .ProseMirror");
+    if (prosemirrorEditor) {
+      return;
+    }
+
+    // Cache DOM references
+    this.textArea = textArea;
+    this.previewWrapper = document.querySelector(".d-editor-preview-wrapper");
+    this.scrollParent = document.querySelector(".wmd-controls");
+    this.preview = document.querySelector(".d-editor-preview");
+
+    if (!this.previewWrapper || !this.textArea) {
+      return;
+    }
+
+    this.isInitialized = true;
+
+    // Create style element for highlighting
     this.activeElementCSSStyleRule = document.createElement("style");
     this.activeElementCSSStyleRule.type = "text/css";
-    this.activeElementCSSStyleRule.id = "preview-highlight";
+    this.activeElementCSSStyleRule.id = "preview-highlight-" + Date.now();
     document.head.appendChild(this.activeElementCSSStyleRule);
 
-    // Event handler for click events
-    this.clickHandler = (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      const lineNumber = this.getLineNumber(event.target);
-      this.scrollTextAreaToCorrectPosition(textArea, lineNumber);
-
-      const previewElement = this.findElementByLineNumber(lineNumber, previewWrapper);
-      if (previewElement) {
-        this.updateActiveElementCSSStyleRule(previewElement);
-      }
-    };
-
-    // Event handler for keydown events
-    this.keyDownHandler = (event) => {
-      // Check if the event key is an arrow key
-      if (
-        ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)
-      ) {
-        setTimeout(() => this.scrollPreviewWrapperToCorrectPosition(textArea, previewWrapper, scrollParent), 0);
-      }
-    };
-
-    // Event handler for updating the preview wrapper's scroll position
-    this.scrollPreviewWrapperToCorrectPosition = (ta, pw, sp) => {
-      // This line is absolutely essential to prevent scrolling issues
-      // in the lower parts of long posts; preventing collapse during redraw:
-      if (this.preview) {
-        this.preview.style.minHeight = `${this.preview.scrollHeight}px`;
-      }
-
-      const cursorPosition = ta.selectionStart;
-      const textUpToCursor = ta.value.substring(0, cursorPosition);
-      const lineNumber = textUpToCursor.split("\n").length - 1;
-
-      const previewElement = this.findElementByLineNumber(lineNumber, pw);
-      if (previewElement) {
-        this.updateActiveElementCSSStyleRule(previewElement);
-        pw.scrollTop = this.getOffsetTopUntil(previewElement, sp) - parseInt(pw.clientHeight / 2, 10);
-      }
-    };
+    // Bind handlers with proper context
+    this.clickHandler = this._handleClick.bind(this);
+    this.scrollHandler = this._handleScroll.bind(this);
+    this.inputHandler = this._handleInput.bind(this);
+    this.keyDownHandler = this._handleKeyDown.bind(this);
 
     // Add event listeners
-    previewWrapper.addEventListener("mousedown", this.clickHandler);
-    textArea.addEventListener("mouseup", () => this.scrollPreviewWrapperToCorrectPosition(textArea, previewWrapper, scrollParent));
-    textArea.addEventListener("input", () => this.scrollPreviewWrapperToCorrectPosition(textArea, previewWrapper, scrollParent));
-    textArea.addEventListener("keydown", this.keyDownHandler);
+    this.previewWrapper.addEventListener("mousedown", this.clickHandler);
+    this.textArea.addEventListener("mouseup", this.scrollHandler);
+    this.textArea.addEventListener("input", this.inputHandler);
+    this.textArea.addEventListener("keydown", this.keyDownHandler);
   },
 
-  scrollTextAreaToCorrectPosition(ta, lineIndex) {
-    if (lineIndex === null) {
-      return null;
+  _handleClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const lineNumber = this.getLineNumber(event.target);
+    if (lineNumber === null) {
+      return;
     }
-    
-    const newlines = [-1]; // Index of imaginary \n before first line
+
+    this.scrollTextAreaToCorrectPosition(lineNumber);
+
+    const previewElement = this.findElementByLineNumber(lineNumber);
+    if (previewElement) {
+      this.updateActiveElementCSSStyleRule(previewElement);
+    }
+  },
+
+  _handleScroll() {
+    this._debouncedScrollPreview();
+  },
+
+  _handleInput() {
+    this._debouncedScrollPreview();
+  },
+
+  _handleKeyDown(event) {
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+      // Use debounce for arrow key navigation
+      this._debouncedScrollPreview();
+    }
+  },
+
+  _debouncedScrollPreview() {
+    if (this.isDestroying || this.isDestroyed) {
+      return;
+    }
+
+    this._scrollDebounceTimer = debounce(
+      this,
+      this.scrollPreviewWrapperToCorrectPosition,
+      SCROLL_DEBOUNCE_MS
+    );
+  },
+
+  scrollPreviewWrapperToCorrectPosition() {
+    if (this.isDestroying || this.isDestroyed || !this.textArea || !this.previewWrapper) {
+      return;
+    }
+
+    // Prevent collapse during redraw
+    if (this.preview && this.preview.scrollHeight > 0) {
+      this.preview.style.minHeight = `${this.preview.scrollHeight}px`;
+    }
+
+    const cursorPosition = this.textArea.selectionStart;
+    const textUpToCursor = this.textArea.value.substring(0, cursorPosition);
+    const lineNumber = textUpToCursor.split("\n").length - 1;
+
+    const previewElement = this.findElementByLineNumber(lineNumber);
+    if (previewElement) {
+      // Debounce the highlight update separately
+      this._highlightDebounceTimer = debounce(
+        this,
+        () => this.updateActiveElementCSSStyleRule(previewElement),
+        HIGHLIGHT_DEBOUNCE_MS
+      );
+
+      const offset = this.getOffsetTopUntil(previewElement, this.scrollParent);
+      this.previewWrapper.scrollTop = offset - parseInt(this.previewWrapper.clientHeight / 2, 10);
+    }
+  },
+
+  scrollTextAreaToCorrectPosition(lineIndex) {
+    if (lineIndex === null || !this.textArea) {
+      return;
+    }
+
+    const ta = this.textArea;
+    const newlines = [-1];
     for (let i = 0; i < ta.value.length; ++i) {
       if (ta.value[i] === "\n") {
         newlines.push(i);
@@ -138,126 +205,115 @@ export default Component.extend({
     const selEnd = newlines[lineIndex + 1] || ta.value.length;
 
     if (this.isSafari()) {
-      // Create the clone if it doesn't exist
-      if (!this.clonedTextArea) {
-        this.clonedTextArea = ta.cloneNode();
-        this.clonedTextArea.style.visibility = "hidden";
-        this.clonedTextArea.style.position = "absolute";
-        this.clonedTextArea.style.left = "-9999px";
-        this.clonedTextArea.style.top = "-9999px";
-        document.body.appendChild(this.clonedTextArea);
-      }
-
-      // Update relevant styles to match the original textarea
-      this.clonedTextArea.style.width = getComputedStyle(ta).width;
-      this.clonedTextArea.style.height = "1px"; // Minimize the height of the clone
-      this.clonedTextArea.style.fontSize = getComputedStyle(ta).fontSize;
-      this.clonedTextArea.style.lineHeight = getComputedStyle(ta).lineHeight;
-      this.clonedTextArea.style.fontFamily = getComputedStyle(ta).fontFamily;
-      this.clonedTextArea.style.overflow = "hidden"; // Prevent scroll bars on the clone
-
-      // Set the value of the clone up to the selection point
-      this.clonedTextArea.value = ta.value.substring(0, selStart);
-
-      // Measure the scrollTop of the clone
-      const scrollTop = this.clonedTextArea.scrollHeight;
-
-      // Calculate the vertical center position
-      const lineHeight = parseInt(getComputedStyle(ta).lineHeight, 10);
-      const textAreaHeight = ta.clientHeight;
-      let verticalCenter = scrollTop - textAreaHeight / 2 + lineHeight / 2;
-
-      // Ensure we never scroll to a negative location
-      verticalCenter = Math.max(verticalCenter, 0);
-
-      // If the line is near the top and we cannot center it, set scrollTop to 0
-      if (scrollTop < textAreaHeight / 2) {
-        verticalCenter = 0;
-      }
-
-      // Set the scrollTop on the original textarea to center the selected text vertically
-      ta.scrollTop = verticalCenter;
+      this._scrollSafari(ta, selStart);
     } else {
-      // Normal browsers support this method
-
-      // Needs collapsed selection (otherwise the blur/focus thing doesn't work)
+      // Standard browsers
       ta.selectionStart = ta.selectionEnd = selStart;
-
-      // Then scrolls cursor into focus
       ta.blur();
       ta.focus();
     }
-    // Then make the selection
+
     ta.selectionStart = selStart;
     ta.selectionEnd = selEnd;
   },
 
-  // Update the CSS rule for the active element
+  _scrollSafari(ta, selStart) {
+    if (!this.clonedTextArea) {
+      this.clonedTextArea = ta.cloneNode();
+      this.clonedTextArea.style.cssText =
+        "visibility:hidden;position:absolute;left:-9999px;top:-9999px;height:1px;overflow:hidden";
+      document.body.appendChild(this.clonedTextArea);
+    }
+
+    const computedStyle = getComputedStyle(ta);
+    this.clonedTextArea.style.width = computedStyle.width;
+    this.clonedTextArea.style.fontSize = computedStyle.fontSize;
+    this.clonedTextArea.style.lineHeight = computedStyle.lineHeight;
+    this.clonedTextArea.style.fontFamily = computedStyle.fontFamily;
+    this.clonedTextArea.value = ta.value.substring(0, selStart);
+
+    const scrollTop = this.clonedTextArea.scrollHeight;
+    const lineHeight = parseInt(computedStyle.lineHeight, 10);
+    const textAreaHeight = ta.clientHeight;
+    let verticalCenter = Math.max(0, scrollTop - textAreaHeight / 2 + lineHeight / 2);
+
+    if (scrollTop < textAreaHeight / 2) {
+      verticalCenter = 0;
+    }
+
+    ta.scrollTop = verticalCenter;
+  },
+
   updateActiveElementCSSStyleRule(previewElement) {
-    const highlightElements = document.querySelectorAll("#preview-highlight");
+    if (!this.activeElementCSSStyleRule || this.isDestroying || this.isDestroyed) {
+      return;
+    }
+
+    // Clean up duplicate highlight styles
+    const highlightElements = document.querySelectorAll("[id^='preview-highlight-']");
     for (let i = 0; i < highlightElements.length - 1; i++) {
       highlightElements[i].remove();
     }
+
     const selector = this.getUniqueCSSSelector(previewElement);
-    this.activeElementCSSStyleRule.innerHTML = `${selector} { box-shadow: 0px 0px 0px 1px rgba(0,144,237,.5) !important; background-color: rgba(0, 144, 237, 0.35); z-index: 3; }`;
+    this.activeElementCSSStyleRule.innerHTML =
+      `${selector} { box-shadow: 0px 0px 0px 1px rgba(0,144,237,.5) !important; background-color: rgba(0, 144, 237, 0.35); z-index: 3; }`;
   },
 
-  findElementByLineNumber(line, pane) {
-    if (line === null) {
+  findElementByLineNumber(line) {
+    if (line === null || !this.previewWrapper) {
       return null;
     }
-    
-    const previewElements = pane.querySelectorAll(`[data-ln="${line}"]`);
-    let previewElement = null;
+
+    const previewElements = this.previewWrapper.querySelectorAll(`[data-ln="${line}"]`);
     if (previewElements.length > 0) {
-      previewElement = previewElements[previewElements.length - 1]; // Get the last element
+      return previewElements[previewElements.length - 1];
     }
-    if (previewElement) {
-      return previewElement;
-    } else if (line === 0) {
+
+    if (line === 0) {
       return null;
-    } else {
-      return this.findElementByLineNumber(line - 1, pane);
     }
+
+    return this.findElementByLineNumber(line - 1);
   },
 
   getLineNumber(target) {
-    // Check if the current element has the attribute
-    if (target.getAttribute("data-ln") !== null) {
-      // If the attribute is found, return its value
-      const lineNumber = parseInt(target.getAttribute("data-ln"), 10);
-      return lineNumber;
-    } else {
-      // If the element is the document root, the attribute wasn't found
-      if (target.nodeName === "HTML") {
-        return null; // Attribute not found
-      }
-      // Move up to the parent element and check again
-      return this.getLineNumber(target.parentElement);
+    if (!target || target.nodeName === "HTML") {
+      return null;
     }
+
+    const ln = target.getAttribute("data-ln");
+    if (ln !== null) {
+      return parseInt(ln, 10);
+    }
+
+    return this.getLineNumber(target.parentElement);
   },
 
   getOffsetTopUntil(elem, parent) {
-    if (!(elem && parent)) {
+    if (!elem || !parent) {
       return 0;
     }
-    
+
     const offsetParent = elem.offsetParent;
     const offsetTop = elem.offsetTop;
+
     if (offsetParent === parent) {
       return offsetTop;
     }
+
     return offsetTop + this.getOffsetTopUntil(offsetParent, parent);
   },
 
   getUniqueCSSSelector(el) {
-    // get a unique selector (that can be used in a persistent CSS rule)
     const stack = [];
-    while (el.parentNode !== null && el.nodeName.toLowerCase() !== "html") {
+    while (el && el.parentNode && el.nodeName.toLowerCase() !== "html") {
       let sibCount = 0;
       let sibIndex = 0;
-      for (let i = 0; i < el.parentNode.childNodes.length; i++) {
-        const sib = el.parentNode.childNodes[i];
+      const siblings = el.parentNode.childNodes;
+
+      for (let i = 0; i < siblings.length; i++) {
+        const sib = siblings[i];
         if (sib.nodeType === Node.ELEMENT_NODE && sib.nodeName === el.nodeName) {
           if (sib === el) {
             sibIndex = sibCount;
@@ -265,59 +321,83 @@ export default Component.extend({
           sibCount++;
         }
       }
-      if (el.hasAttribute("id") && el.id !== "") {
+
+      if (el.id) {
         stack.unshift(el.nodeName.toLowerCase() + "#" + el.id);
       } else if (sibCount > 1) {
-        stack.unshift(
-          el.nodeName.toLowerCase() + ":nth-of-type(" + (sibIndex + 1) + ")"
-        );
+        stack.unshift(el.nodeName.toLowerCase() + ":nth-of-type(" + (sibIndex + 1) + ")");
       } else {
         stack.unshift(el.nodeName.toLowerCase());
       }
+
       el = el.parentNode;
     }
 
-    return stack.join(" > "); // join with " > " to create a valid CSS selector
+    return stack.join(" > ");
   },
 
   isSafari() {
-    const userAgent = navigator.userAgent;
-    const isChrome = userAgent.indexOf("Chrome") > -1;
-    const isSafari = userAgent.indexOf("Safari") > -1;
-
-    // Chrome has both 'Chrome' and 'Safari' inside userAgent string.
-    // Safari has only 'Safari'.
-    return isSafari && !isChrome;
+    const ua = navigator.userAgent;
+    return ua.indexOf("Safari") > -1 && ua.indexOf("Chrome") === -1;
   },
 
   willDestroyElement() {
     this._super(...arguments);
+    this._cleanup();
+  },
 
-    // Clean up: Remove event listeners and style element
-    const textArea = document.querySelector(".d-editor-textarea-wrapper textarea");
-    const previewWrapper = document.querySelector(".d-editor-preview-wrapper");
-
-    if (textArea && previewWrapper && this.clickHandler) {
-      previewWrapper.removeEventListener("mousedown", this.clickHandler);
-      textArea.removeEventListener("mouseup", this.scrollPreviewWrapperToCorrectPosition);
-      textArea.removeEventListener("input", this.scrollPreviewWrapperToCorrectPosition);
-      textArea.removeEventListener("keydown", this.keyDownHandler);
+  _cleanup() {
+    // Cancel pending debounce timers
+    if (this._scrollDebounceTimer) {
+      cancel(this._scrollDebounceTimer);
+    }
+    if (this._highlightDebounceTimer) {
+      cancel(this._highlightDebounceTimer);
     }
 
-    if (this.activeElementCSSStyleRule) {
-      document.head.removeChild(this.activeElementCSSStyleRule);
-      this.activeElementCSSStyleRule = null;
+    // Remove event listeners
+    if (this.previewWrapper && this.clickHandler) {
+      this.previewWrapper.removeEventListener("mousedown", this.clickHandler);
+    }
+    if (this.textArea) {
+      if (this.scrollHandler) {
+        this.textArea.removeEventListener("mouseup", this.scrollHandler);
+      }
+      if (this.inputHandler) {
+        this.textArea.removeEventListener("input", this.inputHandler);
+      }
+      if (this.keyDownHandler) {
+        this.textArea.removeEventListener("keydown", this.keyDownHandler);
+      }
     }
 
+    // Remove style element
+    if (this.activeElementCSSStyleRule && this.activeElementCSSStyleRule.parentNode) {
+      this.activeElementCSSStyleRule.parentNode.removeChild(this.activeElementCSSStyleRule);
+    }
+
+    // Remove cloned textarea
     if (this.clonedTextArea && this.clonedTextArea.parentNode) {
       this.clonedTextArea.parentNode.removeChild(this.clonedTextArea);
-      this.clonedTextArea = null;
     }
 
-    // Clean up observer if it exists
+    // Disconnect observer
     if (this.textareaObserver) {
       this.textareaObserver.disconnect();
-      this.textareaObserver = null;
     }
+
+    // Clear references
+    this.clickHandler = null;
+    this.scrollHandler = null;
+    this.inputHandler = null;
+    this.keyDownHandler = null;
+    this.preview = null;
+    this.previewWrapper = null;
+    this.scrollParent = null;
+    this.textArea = null;
+    this.activeElementCSSStyleRule = null;
+    this.clonedTextArea = null;
+    this.textareaObserver = null;
+    this.isInitialized = false;
   },
 });
