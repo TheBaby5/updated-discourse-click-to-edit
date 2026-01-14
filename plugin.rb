@@ -2,7 +2,7 @@
 
 # name: discourse-click-to-edit
 # about: Click in composer preview to go to the markdown source line and vice versa.
-# version: 0.13
+# version: 0.14
 # authors: Thijs Brilleman
 # meta_topic_id: https://meta.discourse.org/t/click-to-edit/321054
 # url: https://github.com/thijsbrilleman/discourse-click-to-edit

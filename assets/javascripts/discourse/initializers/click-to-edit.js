@@ -4,16 +4,90 @@ import { cancel, debounce, schedule } from "@ember/runloop";
 const SCROLL_DEBOUNCE_MS = 50;
 const HIGHLIGHT_DEBOUNCE_MS = 100;
 
-// Common BBCode tags that Discourse supports
+// =============================================
+// SUPPORTED SYNTAX PATTERNS
+// =============================================
+
+// BBCode tags (case-insensitive)
 const BBCODE_TAGS = [
-  'b', 'i', 'u', 's', 'strike', 'code', 'pre', 'quote', 'img', 'url', 'link',
-  'email', 'size', 'color', 'centre', 'center', 'right', 'left', 'indent',
-  'list', 'ul', 'ol', 'li', 'table', 'tr', 'td', 'th', 'spoiler', 'details',
-  'summary', 'poll', 'date', 'time', 'hide', 'blur'
+  // Text formatting
+  'b', 'i', 'u', 's', 'strike', 'sub', 'sup',
+  // Code
+  'code', 'pre', 'mono',
+  // Quotes & references
+  'quote', 'blockquote',
+  // Links & media
+  'img', 'url', 'link', 'email', 'video', 'audio',
+  // Alignment & layout
+  'size', 'color', 'font', 'highlight',
+  'center', 'centre', 'left', 'right', 'justify',
+  'indent', 'float', 'floatl', 'floatr',
+  // Lists
+  'list', 'ul', 'ol', 'li',
+  // Tables
+  'table', 'tr', 'td', 'th', 'thead', 'tbody',
+  // Special Discourse BBCode
+  'spoiler', 'blur', 'hide', 'nsfw',
+  'details', 'summary',
+  'poll', 'date', 'time',
+  'wrap', 'rawblock',
+  // Media embeds
+  'youtube', 'vimeo', 'dailymotion',
+  // Other
+  'hr', 'br', 'clear'
 ];
 
-// Regex to match BBCode opening tags
-const BBCODE_REGEX = new RegExp(`\\[(${BBCODE_TAGS.join('|')})(?:=[^\\]]*)?\\]`, 'gi');
+// Regex patterns for different syntax types
+const PATTERNS = {
+  // BBCode: [tag], [tag=value], [/tag]
+  bbcode: /\[\/?[\w-]+(?:=[^\]]*)?]/gi,
+
+  // Markdown formatting
+  mdBold: /\*\*([^*]+)\*\*/g,
+  mdItalic: /\*([^*]+)\*/g,
+  mdStrike: /~~([^~]+)~~/g,
+  mdCode: /`([^`]+)`/g,
+  mdCodeBlock: /```[\s\S]*?```/g,
+
+  // Markdown links & images
+  mdLink: /\[([^\]]*)\]\([^)]+\)/g,
+  mdImage: /!\[([^\]]*)\]\([^)]+\)/g,
+  mdImageUpload: /!\[[^\]]*\]\(upload:\/\/[^)]+\)/g,
+
+  // Markdown headings
+  mdHeading: /^#{1,6}\s+/gm,
+
+  // Markdown quotes
+  mdQuote: /^>\s*/gm,
+
+  // Markdown lists
+  mdUnorderedList: /^[\*\-\+]\s+/gm,
+  mdOrderedList: /^\d+\.\s+/gm,
+
+  // Markdown tables
+  mdTableRow: /^\|.*\|$/gm,
+  mdTableSeparator: /^\|[\s\-:|]+\|$/gm,
+
+  // Markdown footnotes
+  mdFootnote: /\^\[([^\]]+)\]/g,
+
+  // Discourse special syntax
+  discourseEmoji: /:[\w_+-]+:/g,
+  discourseUpload: /upload:\/\/[\w.]+/g,
+  discourseMention: /@[\w_-]+/g,
+  discourseHashtag: /#[\w_-]+/g,
+
+  // HTML elements
+  htmlTag: /<\/?[\w-]+(?:\s+[^>]*)?\/?>/gi,
+  htmlVideo: /<video[\s\S]*?<\/video>/gi,
+  htmlDiv: /<div[^>]*>[\s\S]*?<\/div>/gi,
+
+  // Date/time picker
+  discourseDate: /\[date=[^\]]+\]/gi,
+
+  // Poll syntax
+  discoursePoll: /\[poll[^\]]*\][\s\S]*?\[\/poll\]/gi
+};
 
 class ClickToEditHandler {
   constructor() {
@@ -95,7 +169,7 @@ class ClickToEditHandler {
 
     const target = event.target;
 
-    // Try line number first (works for Markdown)
+    // Try line number first (works for Markdown with data-ln)
     const lineNumber = this.getLineNumber(target);
     if (lineNumber !== null) {
       this.scrollTextAreaToCorrectPosition(lineNumber);
@@ -106,7 +180,7 @@ class ClickToEditHandler {
       return;
     }
 
-    // Fallback: content-based matching (works for BBCode)
+    // Fallback: content-based matching (works for BBCode, HTML, special syntax)
     const matchedLine = this.findLineByContent(target);
     if (matchedLine !== null) {
       this.scrollTextAreaToCorrectPosition(matchedLine);
@@ -132,7 +206,7 @@ class ClickToEditHandler {
   }
 
   _handleEditorKeyDown(event) {
-    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown"].includes(event.key)) {
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Enter", "Backspace", "Delete"].includes(event.key)) {
       this._debouncedScrollPreview();
     }
   }
@@ -171,12 +245,17 @@ class ClickToEditHandler {
     const lineNumber = textUpToCursor.split("\n").length - 1;
     const currentLineText = this.getLineText(lineNumber);
 
-    // Try finding element by line number first (Markdown)
+    // Try finding element by line number first (Markdown with data-ln)
     let previewElement = this.findElementByLineNumber(lineNumber);
 
-    // If not found, try content-based matching (BBCode)
+    // If not found, try content-based matching
     if (!previewElement && currentLineText) {
       previewElement = this.findElementByContent(currentLineText, lineNumber);
+    }
+
+    // Special handling for specific element types
+    if (!previewElement) {
+      previewElement = this.findElementBySpecialSyntax(currentLineText, lineNumber);
     }
 
     if (previewElement) {
@@ -205,31 +284,51 @@ class ClickToEditHandler {
   }
 
   // =============================================
-  // CONTENT-BASED MATCHING (for BBCode support)
+  // CONTENT-BASED MATCHING (for all syntax types)
   // =============================================
 
   findLineByContent(element) {
     if (!element || !this.textArea) return null;
 
     const elementText = element.textContent?.trim();
-    if (!elementText || elementText.length < 2) return null;
+    if (!elementText || elementText.length < 1) return null;
 
     const lines = this.textArea.value.split("\n");
-
-    // Normalize text for comparison
     const normalizedTarget = this.normalizeText(elementText);
 
+    // First pass: exact match
     for (let i = 0; i < lines.length; i++) {
-      const lineText = this.stripBBCodeTags(lines[i]);
-      const normalizedLine = this.normalizeText(lineText);
+      const strippedLine = this.stripAllSyntax(lines[i]);
+      const normalizedLine = this.normalizeText(strippedLine);
 
-      // Check if line contains substantial part of element text
       if (normalizedLine && normalizedTarget) {
-        if (normalizedLine.includes(normalizedTarget) ||
-            normalizedTarget.includes(normalizedLine) ||
-            this.fuzzyMatch(normalizedLine, normalizedTarget)) {
+        // Exact match
+        if (normalizedLine === normalizedTarget) {
           return i;
         }
+      }
+    }
+
+    // Second pass: contains match
+    for (let i = 0; i < lines.length; i++) {
+      const strippedLine = this.stripAllSyntax(lines[i]);
+      const normalizedLine = this.normalizeText(strippedLine);
+
+      if (normalizedLine && normalizedTarget) {
+        if (normalizedLine.includes(normalizedTarget) ||
+            normalizedTarget.includes(normalizedLine)) {
+          return i;
+        }
+      }
+    }
+
+    // Third pass: fuzzy match
+    for (let i = 0; i < lines.length; i++) {
+      const strippedLine = this.stripAllSyntax(lines[i]);
+      const normalizedLine = this.normalizeText(strippedLine);
+
+      if (normalizedLine && normalizedTarget && this.fuzzyMatch(normalizedLine, normalizedTarget)) {
+        return i;
       }
     }
 
@@ -239,13 +338,17 @@ class ClickToEditHandler {
   findElementByContent(lineText, lineNumber) {
     if (!lineText || !this.previewWrapper) return null;
 
-    const strippedText = this.stripBBCodeTags(lineText);
+    const strippedText = this.stripAllSyntax(lineText);
     const normalizedLine = this.normalizeText(strippedText);
 
-    if (!normalizedLine || normalizedLine.length < 2) return null;
+    if (!normalizedLine || normalizedLine.length < 1) return null;
 
-    // Get all text-containing elements in preview
-    const candidates = this.previewWrapper.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, td, th, blockquote, span, strong, em, code, pre');
+    // Determine what type of element to look for based on line content
+    const elementTypes = this.getExpectedElementTypes(lineText);
+
+    // Get candidate elements
+    const selector = elementTypes.join(', ');
+    const candidates = this.previewWrapper.querySelectorAll(selector);
 
     let bestMatch = null;
     let bestScore = 0;
@@ -253,13 +356,13 @@ class ClickToEditHandler {
     for (const candidate of candidates) {
       // Skip if element already has a matching data-ln
       const dataLn = candidate.getAttribute('data-ln');
-      if (dataLn !== null) continue;
+      if (dataLn !== null && parseInt(dataLn, 10) !== lineNumber) continue;
 
       const candidateText = this.normalizeText(candidate.textContent);
       if (!candidateText) continue;
 
       const score = this.getMatchScore(normalizedLine, candidateText);
-      if (score > bestScore && score > 0.5) {
+      if (score > bestScore && score > 0.3) {
         bestScore = score;
         bestMatch = candidate;
       }
@@ -268,20 +371,220 @@ class ClickToEditHandler {
     return bestMatch;
   }
 
+  findElementBySpecialSyntax(lineText, lineNumber) {
+    if (!lineText || !this.previewWrapper) return null;
+
+    // Check for specific patterns and find corresponding elements
+
+    // Tables
+    if (lineText.includes('|') && PATTERNS.mdTableRow.test(lineText)) {
+      const tables = this.previewWrapper.querySelectorAll('table');
+      if (tables.length > 0) {
+        // Find the row that matches
+        const cells = lineText.split('|').filter(c => c.trim()).map(c => this.normalizeText(c.trim()));
+        for (const table of tables) {
+          const rows = table.querySelectorAll('tr');
+          for (const row of rows) {
+            const rowCells = Array.from(row.querySelectorAll('td, th')).map(c => this.normalizeText(c.textContent));
+            if (cells.some(c => rowCells.some(rc => rc.includes(c) || c.includes(rc)))) {
+              return row;
+            }
+          }
+        }
+        return tables[0];
+      }
+    }
+
+    // Images
+    if (lineText.includes('![') || /\[img\]/i.test(lineText)) {
+      const images = this.previewWrapper.querySelectorAll('img');
+      if (images.length > 0) {
+        // Try to match by alt text or filename
+        const altMatch = lineText.match(/!\[([^\]]*)\]/);
+        if (altMatch) {
+          const altText = this.normalizeText(altMatch[1]);
+          for (const img of images) {
+            if (this.normalizeText(img.alt).includes(altText)) {
+              return img.parentElement || img;
+            }
+          }
+        }
+        return images[0].parentElement || images[0];
+      }
+    }
+
+    // Videos
+    if (lineText.includes('<video') || /\[video\]/i.test(lineText)) {
+      const videos = this.previewWrapper.querySelectorAll('video, .video-container, .onebox');
+      if (videos.length > 0) return videos[0];
+    }
+
+    // Polls
+    if (/\[poll/i.test(lineText)) {
+      const polls = this.previewWrapper.querySelectorAll('.poll, [data-poll-name]');
+      if (polls.length > 0) return polls[0];
+    }
+
+    // Dates
+    if (/\[date=/i.test(lineText)) {
+      const dates = this.previewWrapper.querySelectorAll('.discourse-local-date, [data-date]');
+      if (dates.length > 0) return dates[0];
+    }
+
+    // Details/spoilers
+    if (/\[details=/i.test(lineText) || /\[spoiler\]/i.test(lineText)) {
+      const details = this.previewWrapper.querySelectorAll('details, .spoiler, .spoiled');
+      if (details.length > 0) return details[0];
+    }
+
+    // Code blocks
+    if (lineText.startsWith('```') || /\[code\]/i.test(lineText)) {
+      const codeBlocks = this.previewWrapper.querySelectorAll('pre, code');
+      if (codeBlocks.length > 0) return codeBlocks[0];
+    }
+
+    // Blockquotes
+    if (lineText.startsWith('>') || /\[quote/i.test(lineText)) {
+      const quotes = this.previewWrapper.querySelectorAll('blockquote, .quote');
+      if (quotes.length > 0) return quotes[0];
+    }
+
+    // Headings
+    const headingMatch = lineText.match(/^(#{1,6})\s/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const headings = this.previewWrapper.querySelectorAll(`h${level}`);
+      if (headings.length > 0) {
+        const headingText = this.normalizeText(lineText.replace(/^#+\s*/, ''));
+        for (const h of headings) {
+          if (this.normalizeText(h.textContent).includes(headingText)) {
+            return h;
+          }
+        }
+        return headings[0];
+      }
+    }
+
+    // Emojis
+    if (PATTERNS.discourseEmoji.test(lineText)) {
+      const emojis = this.previewWrapper.querySelectorAll('img.emoji, .emoji');
+      if (emojis.length > 0) return emojis[0].closest('p') || emojis[0];
+    }
+
+    return null;
+  }
+
+  getExpectedElementTypes(lineText) {
+    const types = new Set(['p', 'li', 'span', 'div']);
+
+    // Headings
+    if (/^#{1,6}\s/.test(lineText)) {
+      const level = (lineText.match(/^(#+)/) || ['', '#'])[1].length;
+      types.add(`h${level}`);
+    }
+
+    // Lists
+    if (/^[\*\-\+]\s/.test(lineText) || /^\d+\.\s/.test(lineText) || /\[li\]/i.test(lineText)) {
+      types.add('li');
+      types.add('ul');
+      types.add('ol');
+    }
+
+    // Tables
+    if (lineText.includes('|')) {
+      types.add('table');
+      types.add('tr');
+      types.add('td');
+      types.add('th');
+    }
+
+    // Blockquotes
+    if (lineText.startsWith('>') || /\[quote/i.test(lineText)) {
+      types.add('blockquote');
+      types.add('.quote');
+    }
+
+    // Code
+    if (lineText.includes('`') || /\[code\]/i.test(lineText)) {
+      types.add('code');
+      types.add('pre');
+    }
+
+    // Links
+    if (/\[.*\]\(.*\)/.test(lineText) || /\[url/i.test(lineText)) {
+      types.add('a');
+    }
+
+    // Images
+    if (/!\[.*\]/.test(lineText) || /\[img\]/i.test(lineText)) {
+      types.add('img');
+      types.add('.lightbox-wrapper');
+    }
+
+    // Bold/italic/formatting
+    if (/\*\*.*\*\*/.test(lineText) || /\[b\]/i.test(lineText)) {
+      types.add('strong');
+      types.add('b');
+    }
+    if (/\*[^*]+\*/.test(lineText) || /\[i\]/i.test(lineText)) {
+      types.add('em');
+      types.add('i');
+    }
+
+    // Special elements
+    if (/\[details/i.test(lineText)) types.add('details');
+    if (/\[spoiler/i.test(lineText)) types.add('.spoiler');
+    if (/\[poll/i.test(lineText)) types.add('.poll');
+    if (/\[date/i.test(lineText)) types.add('.discourse-local-date');
+
+    return Array.from(types);
+  }
+
+  // =============================================
+  // TEXT PROCESSING
+  // =============================================
+
+  stripAllSyntax(text) {
+    if (!text) return '';
+
+    let result = text;
+
+    // Strip BBCode tags
+    result = result.replace(PATTERNS.bbcode, '');
+
+    // Strip Markdown formatting
+    result = result.replace(PATTERNS.mdBold, '$1');
+    result = result.replace(PATTERNS.mdItalic, '$1');
+    result = result.replace(PATTERNS.mdStrike, '$1');
+    result = result.replace(PATTERNS.mdCode, '$1');
+    result = result.replace(PATTERNS.mdLink, '$1');
+    result = result.replace(PATTERNS.mdImage, '$1');
+    result = result.replace(PATTERNS.mdHeading, '');
+    result = result.replace(PATTERNS.mdQuote, '');
+    result = result.replace(PATTERNS.mdUnorderedList, '');
+    result = result.replace(PATTERNS.mdOrderedList, '');
+    result = result.replace(PATTERNS.mdFootnote, '$1');
+
+    // Strip HTML tags
+    result = result.replace(PATTERNS.htmlTag, '');
+
+    // Strip Discourse special syntax
+    result = result.replace(PATTERNS.discourseUpload, '');
+    result = result.replace(PATTERNS.discourseDate, '');
+
+    // Clean up table syntax
+    result = result.replace(/^\||\|$/g, '');
+    result = result.replace(/\|/g, ' ');
+
+    return result.trim();
+  }
+
   normalizeText(text) {
     if (!text) return '';
     return text
       .toLowerCase()
       .replace(/\s+/g, ' ')
-      .replace(/[^\w\s]/g, '')
-      .trim();
-  }
-
-  stripBBCodeTags(text) {
-    if (!text) return '';
-    // Remove BBCode tags like [b], [/b], [url=...], etc.
-    return text
-      .replace(/\[\/?\w+(?:=[^\]]*)?]/g, '')
+      .replace(/[^\w\s\u00C0-\u024F\u1E00-\u1EFF]/g, '') // Keep unicode letters
       .trim();
   }
 
@@ -290,14 +593,38 @@ class ClickToEditHandler {
     const shorter = str1.length < str2.length ? str1 : str2;
     const longer = str1.length < str2.length ? str2 : str1;
 
-    // Check if shorter string is substantially contained in longer
-    if (shorter.length < 5) return false;
-    return longer.includes(shorter.substring(0, Math.min(20, shorter.length)));
+    if (shorter.length < 3) return shorter === longer;
+
+    // Check word overlap
+    const words1 = shorter.split(' ').filter(w => w.length > 2);
+    const words2 = longer.split(' ').filter(w => w.length > 2);
+
+    if (words1.length === 0) return false;
+
+    let matches = 0;
+    for (const word of words1) {
+      if (words2.some(w => w.includes(word) || word.includes(w))) {
+        matches++;
+      }
+    }
+
+    return matches / words1.length >= 0.5;
   }
 
   getMatchScore(str1, str2) {
     if (!str1 || !str2) return 0;
 
+    // Exact match
+    if (str1 === str2) return 1;
+
+    // Contains match
+    if (str1.includes(str2) || str2.includes(str1)) {
+      const shorter = Math.min(str1.length, str2.length);
+      const longer = Math.max(str1.length, str2.length);
+      return shorter / longer;
+    }
+
+    // Word-based matching
     const words1 = str1.split(' ').filter(w => w.length > 2);
     const words2 = str2.split(' ').filter(w => w.length > 2);
 
@@ -433,7 +760,7 @@ class ClickToEditHandler {
     this.activeElementCSSStyleRule.innerHTML = `
       ${selector} {
         box-shadow: 0px 0px 0px 2px var(--tertiary, rgba(0,144,237,.7)) !important;
-        background-color: var(--tertiary-low, rgba(0, 144, 237, 0.2)) !important;
+        background-color: var(--tertiary-low, rgba(0, 144, 237, 0.15)) !important;
         border-radius: 3px;
         z-index: 3;
         transition: box-shadow 0.2s ease, background-color 0.2s ease;
