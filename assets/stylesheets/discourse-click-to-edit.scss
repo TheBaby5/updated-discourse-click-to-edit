@@ -1,27 +1,66 @@
-// no css yet
+// Click-to-edit visual styles
 
 .d-editor-preview-wrapper .d-editor-preview {
   @mixin activeComposerPreviewElement {
-    box-shadow: 0px 0px 0px 1px rgba(0, 144, 237, 0.35) !important;
-    background-color: rgba(0, 144, 237, 0.35);
+    box-shadow: 0px 0px 0px 2px var(--tertiary) !important;
+    background-color: var(--tertiary-low);
+    border-radius: 3px;
     z-index: 3;
+    position: relative;
   }
 
+  // Change cursor to indicate clickable - pointer is more universally understood
   &,
   a {
-    cursor: zoom-in !important;
+    cursor: pointer !important;
   }
 
+  // Hoverable elements with click-to-edit indicator
   a,
   p,
   em,
   strong,
   code,
+  li,
   h1,
   h2,
+  h3,
+  h4,
+  blockquote,
   pre > code > span {
+    position: relative;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
+
     &:not(:has(:hover)):hover {
       @include activeComposerPreviewElement;
+
+      // Show "Click to edit" tooltip
+      &::after {
+        content: "✎ Click to edit";
+        position: absolute;
+        top: -28px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--primary-very-high);
+        color: var(--secondary);
+        padding: 4px 10px;
+        border-radius: 4px;
+        font-size: 11px;
+        font-weight: 500;
+        white-space: nowrap;
+        z-index: 1000;
+        pointer-events: none;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        opacity: 0;
+        animation: fadeInTooltip 0.2s ease 0.3s forwards;
+      }
+    }
+  }
+
+  // Don't show tooltip on inline elements to avoid clutter
+  em, strong, code {
+    &:not(:has(:hover)):hover::after {
+      display: none;
     }
   }
 
@@ -35,5 +74,17 @@
     display: inline-block;
     width: inherit;
     min-width: 100%;
+  }
+}
+
+// Tooltip fade-in animation
+@keyframes fadeInTooltip {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
   }
 }
